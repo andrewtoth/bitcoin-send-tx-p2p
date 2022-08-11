@@ -12,6 +12,7 @@ use bitcoin::secp256k1::rand::Rng;
 use bitcoin::{Network, Transaction};
 use log::{info, trace};
 use message_handler::{BroadcastState, MessageHandler};
+#[cfg(feature = "tor")]
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
