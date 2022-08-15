@@ -10,6 +10,8 @@
 //! transaction it will not respond with a a `getdata` message, in which case
 //! the sending function will timeout and disconnect.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 mod async_encode;
 mod message_handler;
 
