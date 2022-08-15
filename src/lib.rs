@@ -187,7 +187,7 @@ async fn send_tx_p2p(
     )
     .await;
 
-    if let Ok(_) = result {
+    if let Ok(Ok(_)) = result {
         info!("Sent tx successfully");
     }
 
