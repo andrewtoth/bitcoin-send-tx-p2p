@@ -1,11 +1,23 @@
 [package]
 name = "bitcoin-send-tx-p2p"
 version = "0.1.0"
+authors = ["Andrew Toth"]
+license = "MIT"
+homepage = "https://github.com/andrewtoth/bitcoin-send-tx-p2p/"
+repository = "https://github.com/andrewtoth/bitcoin-send-tx-p2p/"
+documentation = "https://docs.rs/bitcoin-send-tx-p2p/"
+description = "Send a bitcoin tx through the peer-to-peer protocol via clearnet or tor"
+keywords = [ "crypto", "bitcoin", "p2p" ]
+readme = "README.md"
 edition = "2021"
 
 [features]
 default = []
 tor = ["dep:tokio-socks"]
+
+[package.metadata.docs.rs]
+features = [ "tor" ]
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 anyhow = "1.0"

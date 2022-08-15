@@ -1,3 +1,15 @@
+//! Send a Bitcoin Transaction to a node via Peer-to-Peer protocol
+//!
+//! Supports sending via clearnet with a [SocketAddr] or via tor using a
+//! [SocketAddr] or onion address with the [IntoTargetAddr] trait.
+//!
+//! Under the hood it creates a connection to the node and performs the version
+//! handshake. Then it sends an `inv` message with the txid or wtxid and waits
+//! for a `getdata` message. After transmitting a `tx` message with the full
+//! transaction it disconnects. Note that if the receiving node already has the
+//! transaction it will not respond with a a `getdata` message, in which case
+//! the sending function will timeout and disconnect.
+
 mod async_encode;
 mod message_handler;
 
@@ -20,7 +32,9 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 #[cfg(feature = "tor")]
-use tokio_socks::{tcp::Socks5Stream, IntoTargetAddr, TargetAddr};
+pub use tokio_socks::IntoTargetAddr;
+#[cfg(feature = "tor")]
+use tokio_socks::{tcp::Socks5Stream, TargetAddr};
 
 /// Config options for sending
 pub struct Config {
@@ -43,9 +57,10 @@ pub struct Config {
     /// have the tx
     /// Default is 30 seconds
     pub send_tx_timeout: Duration,
-    #[cfg(feature = "tor")]
     /// Tor SOCKS5 proxy address to send through if using tor
     /// Defaults to 127.0.0.1:9050
+    #[cfg(feature = "tor")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tor")))]
     pub tor_proxy: SocketAddr,
 }
 
@@ -63,7 +78,21 @@ impl Default for Config {
     }
 }
 
-/// Connects to a node at <address> over clearnet and attempts to send it <tx>
+/// Connects to a node at `address` over clearnet and attempts to send it `tx`,
+/// optionally taking [`config`](Config) to specify configuration options
+///
+/// # Example
+/// ```rust
+///use anyhow::Result;
+///use bitcoin::Transaction;
+///use bitcoin_send_tx_p2p::{send_tx_p2p_over_clearnet, Config};
+///
+///async fn send_tx(tx: Transaction) -> Result<()> {
+///    let mut config = Config::default();
+///    config.block_height = 1000;
+///    send_tx_p2p_over_clearnet("127.0.0.1:8333".parse()?, tx, Some(config)).await
+///}
+/// ```
 pub async fn send_tx_p2p_over_clearnet(
     address: SocketAddr,
     tx: Transaction,
@@ -85,8 +114,21 @@ pub async fn send_tx_p2p_over_clearnet(
     .await
 }
 
+/// Connects to a node at `address` over tor and attempts to send it `tx`,
+/// optionally taking [`config`](Config) to specify configuration options
+///
+/// # Example
+/// ```rust
+///use anyhow::Result;
+///use bitcoin::Transaction;
+///use bitcoin_send_tx_p2p::send_tx_p2p_over_tor;
+///
+///async fn send_tx(tx: Transaction) -> Result<()> {
+///    send_tx_p2p_over_tor("cssusbltvosy7hhomxuhicmh5svw6e4z3eebgnyjcnslrloiy5m27pid.onion:8333", tx, None).await
+///}
+/// ```
 #[cfg(feature = "tor")]
-/// Connects to a node at <address> over tor and attempts to send it <tx>
+#[cfg_attr(docsrs, doc(cfg(feature = "tor")))]
 pub async fn send_tx_p2p_over_tor<'t, T>(
     address: T,
     tx: Transaction,
