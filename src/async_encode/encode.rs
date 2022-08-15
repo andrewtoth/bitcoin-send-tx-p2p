@@ -259,7 +259,6 @@ impl AsyncDecodable for Inventory {
             0 => Inventory::Error,
             1 => Inventory::Transaction(AsyncDecodable::async_consensus_decode(r).await?),
             2 => Inventory::Block(AsyncDecodable::async_consensus_decode(r).await?),
-            4 => Inventory::CompactBlock(AsyncDecodable::async_consensus_decode(r).await?),
             5 => Inventory::WTx(AsyncDecodable::async_consensus_decode(r).await?),
             0x40000001 => {
                 Inventory::WitnessTransaction(AsyncDecodable::async_consensus_decode(r).await?)

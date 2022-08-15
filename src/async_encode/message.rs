@@ -2,12 +2,14 @@ use crate::async_encode::encode::AsyncDecodable;
 use async_trait::async_trait;
 use bitcoin::consensus::encode::{CheckedData, Error};
 use bitcoin::network::constants::ServiceFlags;
-use bitcoin::network::message::{CommandString, NetworkMessage, RawNetworkMessage, MAX_MSG_SIZE};
+use bitcoin::network::message::{CommandString, NetworkMessage, RawNetworkMessage};
 use bitcoin::network::message_network::VersionMessage;
 use bitcoin::network::Address;
 use core::iter::FromIterator;
 use std::io::Cursor;
 use tokio::io::{AsyncRead, AsyncReadExt};
+
+const MAX_MSG_SIZE: usize = 5_000_000;
 
 #[async_trait]
 impl AsyncDecodable for RawNetworkMessage {
@@ -66,7 +68,7 @@ impl AsyncDecodable for CommandString {
                 None
             }
         }));
-        Ok(TryFrom::try_from(rv)
+        Ok(CommandString::try_from(rv)
             .map_err(|_| Error::ParseFailed("Failed to parse CommandString"))?)
     }
 }

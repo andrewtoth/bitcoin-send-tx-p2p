@@ -41,15 +41,19 @@ use tokio_socks::{tcp::Socks5Stream, TargetAddr};
 /// Config options for sending
 pub struct Config {
     /// The user agent for the initial version message
-    /// Defaults to /Satoshi:23.0.0/
+    ///
+    /// Defaults to `"/Satoshi:23.0.0/"`
     pub user_agent: String,
     /// The block height for the initial version message
-    /// Defaults to 749_000
+    ///
+    /// Defaults to `749_000`
     pub block_height: i32,
     /// The network to use
-    /// Defaults to Network::Bitcoin
+    ///
+    /// Defaults to [`Network::Bitcoin`]
     pub network: Network,
     /// The timeout duration for the initial connection to the node
+    ///
     /// Default is 30 seconds but that might not be long enough for tor
     pub connection_timeout: Duration,
     /// The timeout duration for the handshake, sending inv, receiving getdata,
@@ -57,10 +61,12 @@ pub struct Config {
     /// Note that if a node already has the tx then it will not respond with
     /// getdata so a timeout here does not necessarily mean the node does not
     /// have the tx
+    ///
     /// Default is 30 seconds
     pub send_tx_timeout: Duration,
     /// Tor SOCKS5 proxy address to send through if using tor
-    /// Defaults to 127.0.0.1:9050
+    ///
+    /// Defaults to `127.0.0.1:9050`
     #[cfg(feature = "tor")]
     #[cfg_attr(docsrs, doc(cfg(feature = "tor")))]
     pub tor_proxy: SocketAddr,
@@ -234,12 +240,16 @@ fn build_version_message(config: &Config, address: Option<SocketAddr>) -> Result
 #[cfg(test)]
 mod tests {
 
-    use super::send_tx_p2p_over_clearnet;
     #[cfg(feature = "tor")]
     use super::send_tx_p2p_over_tor;
+    use super::{send_tx_p2p_over_clearnet, Config};
     use anyhow::Result;
     use bitcoin::consensus::encode::deserialize;
+    use bitcoin::Network;
+    use bitcoincore_rpc::RpcApi;
+    use bitcoind::{downloaded_exe_path, BitcoinD, Conf, P2P};
     use hex::FromHex;
+    use std::net::SocketAddr;
 
     use env_logger;
 
@@ -251,7 +261,7 @@ mod tests {
         let tx_bytes = Vec::from_hex("000000800100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000")?;
         let tx = deserialize(&tx_bytes)?;
         let result = send_tx_p2p_over_tor(
-            "<find ip or onion address to add here bitnodes.io>:8333",
+            "cssusbltvosy7hhomxuhicmh5svw6e4z3eebgnyjcnslrloiy5m27pid.onion:8333",
             tx,
             None,
         )
@@ -264,14 +274,21 @@ mod tests {
     async fn test_clearnet() -> Result<()> {
         let _ = env_logger::builder().is_test(true).try_init();
 
+        let mut conf = Conf::default();
+        conf.p2p = P2P::Yes;
+        let bitcoind = BitcoinD::with_conf(downloaded_exe_path()?, &conf)?;
+        let address = bitcoind.client.get_new_address(None, None)?;
+        // Need to generate a block before bitcoind will respond with getdata for a tx
+        bitcoind.client.generate_to_address(1, &address)?;
+        let address = bitcoind.params.p2p_socket.unwrap();
+
         let tx_bytes = Vec::from_hex("000000800100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000")?;
         let tx = deserialize(&tx_bytes)?;
-        let result = send_tx_p2p_over_clearnet(
-            "<find ip address to add here bitnodes.io>:8333".parse()?,
-            tx,
-            None,
-        )
-        .await;
+
+        let mut config = Config::default();
+        config.network = Network::Regtest;
+
+        let result = send_tx_p2p_over_clearnet(SocketAddr::from(address), tx, Some(config)).await;
         tokio_test::assert_ok!(result, "Send over clearnet failed");
         Ok(())
     }
