@@ -1,6 +1,6 @@
 # Bitcoin Send Tx P2P
 
-Library for sending bitcoin transactions to nodes using the bitcoin 
+Library for sending bitcoin transactions to nodes using the bitcoin
 peer-to-peer protocol, given only a transaction and the IP or onion address of
 the node.
 
@@ -13,14 +13,12 @@ the sending function will timeout and disconnect.
 
 ### Examples
 
-
 ```rust
-use anyhow::Result;
 use bitcoin::Transaction;
 
-use bitcoin_send_tx_p2p::{send_tx_p2p_over_clearnet, send_tx_p2p_over_tor, Config};
+use bitcoin_send_tx_p2p::{send_tx_p2p_over_clearnet, send_tx_p2p_over_tor, Config, Error};
 
-async fn send_tx(tx: Transaction) -> Result<()> {
+async fn send_tx(tx: Transaction) -> Result<(), Error> {
     let mut config = Config::default();
     config.block_height = 1000;
     send_tx_p2p_over_clearnet("127.0.0.1:8333".parse()?, tx, Some(config)).await

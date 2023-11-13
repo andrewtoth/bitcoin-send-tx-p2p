@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use bitcoin::consensus::encode::{CheckedData, Error, MAX_VEC_SIZE};
 use bitcoin::hashes::{sha256d, Hash};
 use bitcoin::network::message_blockdata::Inventory;
+use bitcoin::network::Magic;
 use bitcoin::{BlockHash, Txid, VarInt, Wtxid};
 use core::mem;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -128,7 +129,7 @@ impl AsyncEncodable for VarInt {
             }
             _ => {
                 w.write_u8(0xFF).await?;
-                (self.0 as u64).consensus_encode(w).await?;
+                self.0.consensus_encode(w).await?;
                 Ok(9)
             }
         }
@@ -320,7 +321,7 @@ impl AsyncDecodable for Vec<u8> {
 }
 
 fn sha2_checksum(data: &[u8]) -> [u8; 4] {
-    let checksum = <sha256d::Hash as Hash>::hash(data);
+    let checksum = sha256d::Hash::hash(data);
     [checksum[0], checksum[1], checksum[2], checksum[3]]
 }
 
@@ -353,38 +354,36 @@ impl AsyncDecodable for CheckedData {
     }
 }
 
-#[async_trait]
-impl AsyncDecodable for Txid {
-    #[inline]
-    async fn async_consensus_decode_from_finite_reader<R: AsyncRead + Sized + Send + Unpin>(
-        r: &mut R,
-    ) -> Result<Self, Error> {
-        Ok(Self::from_inner(
-            <<Self as Hash>::Inner>::async_consensus_decode(r).await?,
-        ))
-    }
+macro_rules! impl_sha256d {
+    ($type: ty) => {
+        #[async_trait]
+        impl AsyncDecodable for $type {
+            #[inline]
+            async fn async_consensus_decode_from_finite_reader<
+                R: AsyncRead + Sized + Send + Unpin,
+            >(
+                r: &mut R,
+            ) -> Result<Self, Error> {
+                Ok(Self::from_byte_array(
+                    <[u8; 32]>::async_consensus_decode(r).await?,
+                ))
+            }
+        }
+    };
 }
 
-#[async_trait]
-impl AsyncDecodable for BlockHash {
-    #[inline]
-    async fn async_consensus_decode_from_finite_reader<R: AsyncRead + Sized + Send + Unpin>(
-        r: &mut R,
-    ) -> Result<Self, Error> {
-        Ok(Self::from_inner(
-            <<Self as Hash>::Inner>::async_consensus_decode(r).await?,
-        ))
-    }
-}
+impl_sha256d!(Txid);
+impl_sha256d!(BlockHash);
+impl_sha256d!(Wtxid);
 
 #[async_trait]
-impl AsyncDecodable for Wtxid {
+impl AsyncDecodable for Magic {
     #[inline]
     async fn async_consensus_decode_from_finite_reader<R: AsyncRead + Sized + Send + Unpin>(
         r: &mut R,
     ) -> Result<Self, Error> {
-        Ok(Self::from_inner(
-            <<Self as Hash>::Inner>::async_consensus_decode(r).await?,
+        Ok(Self::from_bytes(
+            <[u8; 4]>::async_consensus_decode_from_finite_reader(r).await?,
         ))
     }
 }

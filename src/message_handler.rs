@@ -1,13 +1,18 @@
-use anyhow::{anyhow, Result};
-use bitcoin::consensus::encode::serialize;
-use bitcoin::network::constants;
-use bitcoin::network::constants::ServiceFlags;
-use bitcoin::network::message::{NetworkMessage, RawNetworkMessage};
-use bitcoin::network::message_blockdata::Inventory;
-use bitcoin::network::message_network::VersionMessage;
-use bitcoin::Transaction;
+use bitcoin::{
+    consensus::encode::serialize,
+    network::{
+        constants::{self, ServiceFlags},
+        message::{NetworkMessage, RawNetworkMessage},
+        message_blockdata::Inventory,
+        message_network::VersionMessage,
+        Magic,
+    },
+    Transaction,
+};
 use log::trace;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::{self, AsyncWrite, AsyncWriteExt};
+
+use crate::Error;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BroadcastState {
@@ -20,14 +25,14 @@ pub enum BroadcastState {
 
 pub struct MessageHandler<W: AsyncWrite + Unpin> {
     writer: W,
-    magic: u32,
+    magic: Magic,
     use_wtxid: bool,
     tx: Transaction,
     state: BroadcastState,
 }
 
 impl<W: AsyncWrite + Unpin> MessageHandler<W> {
-    pub fn new(writer: W, magic: u32, tx: Transaction) -> Self {
+    pub fn new(writer: W, magic: Magic, tx: Transaction) -> Self {
         MessageHandler {
             writer,
             magic,
@@ -41,7 +46,7 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
         self.state
     }
 
-    pub async fn send_version_msg(&mut self, msg: VersionMessage) -> Result<()> {
+    pub async fn send_version_msg(&mut self, msg: VersionMessage) -> io::Result<()> {
         let message = RawNetworkMessage {
             magic: self.magic,
             payload: NetworkMessage::Version(msg),
@@ -52,37 +57,41 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
         Ok(())
     }
 
-    pub async fn handle_message(&mut self, msg: NetworkMessage) -> Result<()> {
+    pub async fn handle_message(&mut self, msg: NetworkMessage) -> Result<(), Error> {
         match msg {
             NetworkMessage::Version(msg) => {
                 if self.state != BroadcastState::AwaitingVersion {
-                    return Err(anyhow!("Received version msg out of order"));
+                    return Err(Error::Protocol("Received version msg out of order".into()));
                 }
                 self.handle_version_msg(msg).await?;
                 self.state = BroadcastState::AwaitingVerack;
             }
             NetworkMessage::Verack => {
                 if self.state != BroadcastState::AwaitingVerack {
-                    return Err(anyhow!("Received verack msg out of order"));
+                    return Err(Error::Protocol("Received verack msg out of order".into()));
                 }
                 self.handle_verack_msg().await?;
                 self.state = BroadcastState::AwaitingGetData;
             }
             NetworkMessage::WtxidRelay => {
                 if self.state != BroadcastState::AwaitingVerack {
-                    return Err(anyhow!("Received wtxidrelay msg out of order"));
+                    return Err(Error::Protocol(
+                        "Received wtxidrelay msg out of order".into(),
+                    ));
                 }
                 self.handle_wtxid_relay_msg().await?;
             }
             NetworkMessage::SendAddrV2 => {
                 if self.state != BroadcastState::AwaitingVerack {
-                    return Err(anyhow!("Received sendaddrv2 msg out of order"));
+                    return Err(Error::Protocol(
+                        "Received sendaddrv2 msg out of order".into(),
+                    ));
                 }
                 trace!("Received sendaddrv2 message");
             }
             NetworkMessage::GetData(inv) => {
                 if self.state != BroadcastState::AwaitingGetData {
-                    return Err(anyhow!("Received getdata msg out of order"));
+                    return Err(Error::Protocol("Received getdata msg out of order".into()));
                 }
                 self.handle_get_data(inv).await?;
                 trace!("Transaction broadcast successfully");
@@ -92,7 +101,7 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
                 if self.state != BroadcastState::AwaitingGetData
                     && self.state != BroadcastState::Done
                 {
-                    return Err(anyhow!("Received ping msg out of order"));
+                    return Err(Error::Protocol("Received ping msg out of order".into()));
                 }
                 self.handle_ping_msg(nonce).await?;
             }
@@ -101,10 +110,8 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
                 if self.state != BroadcastState::AwaitingGetData
                     && self.state != BroadcastState::Done
                 {
-                    return Err(anyhow!(
-                        "Received {} msg out of order {:#?}",
-                        command,
-                        self.state
+                    return Err(Error::Protocol(
+                        format!("Received {} msg out of order {:#?}", command, self.state,).into(),
                     ));
                 }
                 trace!("Received message: {}", command);
@@ -116,15 +123,15 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
         Ok(())
     }
 
-    async fn handle_version_msg(&mut self, version_msg: VersionMessage) -> Result<()> {
+    async fn handle_version_msg(&mut self, version_msg: VersionMessage) -> Result<(), Error> {
         trace!("Received version message");
 
         if !version_msg.relay {
-            return Err(anyhow!("Node does not relay transactions"));
+            return Err(Error::Protocol("Node does not relay transactions".into()));
         }
 
         if !version_msg.services.has(ServiceFlags::WITNESS) {
-            return Err(anyhow!("Node does not support segwit"));
+            return Err(Error::Protocol("Node does not support segwit".into()));
         }
 
         if version_msg.version == constants::PROTOCOL_VERSION {
@@ -132,13 +139,13 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
                 magic: self.magic,
                 payload: NetworkMessage::WtxidRelay,
             };
-            let _ = self.writer.write_all(serialize(&msg).as_slice()).await?;
+            self.writer.write_all(serialize(&msg).as_slice()).await?;
             trace!("Sent wtxid message");
             let msg = RawNetworkMessage {
                 magic: self.magic,
                 payload: NetworkMessage::SendAddrV2,
             };
-            let _ = self.writer.write_all(serialize(&msg).as_slice()).await?;
+            self.writer.write_all(serialize(&msg).as_slice()).await?;
             trace!("Sent sendaddrv2 message");
         }
 
@@ -146,12 +153,12 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
             magic: self.magic,
             payload: NetworkMessage::Verack,
         };
-        let _ = self.writer.write_all(serialize(&msg).as_slice()).await?;
+        self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent verack message");
         Ok(())
     }
 
-    async fn handle_verack_msg(&mut self) -> Result<()> {
+    async fn handle_verack_msg(&mut self) -> io::Result<()> {
         trace!("Received verack message");
         let inv = if self.use_wtxid {
             Inventory::WTx(self.tx.wtxid())
@@ -162,43 +169,47 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
             magic: self.magic,
             payload: NetworkMessage::Inv(vec![inv]),
         };
-        let _ = self.writer.write_all(serialize(&msg).as_slice()).await?;
+        self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent inv message");
         Ok(())
     }
 
-    async fn handle_wtxid_relay_msg(&mut self) -> Result<()> {
+    async fn handle_wtxid_relay_msg(&mut self) -> io::Result<()> {
         trace!("Received wtxid message");
         self.use_wtxid = true;
         Ok(())
     }
 
-    async fn handle_get_data(&mut self, inv: Vec<Inventory>) -> Result<()> {
+    async fn handle_get_data(&mut self, inv: Vec<Inventory>) -> Result<(), Error> {
         trace!("Received getdata message");
         if self.use_wtxid && !inv.contains(&Inventory::WTx(self.tx.wtxid())) {
-            return Err(anyhow!("Getdata message does not contain our wtxid"));
+            return Err(Error::Protocol(
+                "Getdata message does not contain our wtxid".into(),
+            ));
         } else if !self.use_wtxid
             && !inv.contains(&Inventory::Transaction(self.tx.txid()))
             && !inv.contains(&Inventory::WitnessTransaction(self.tx.txid()))
         {
-            return Err(anyhow!("Getdata message does not contain our txid"));
+            return Err(Error::Protocol(
+                "Getdata message does not contain our txid".into(),
+            ));
         }
         let msg = RawNetworkMessage {
             magic: self.magic,
             payload: NetworkMessage::Tx(self.tx.clone()),
         };
-        let _ = self.writer.write_all(serialize(&msg).as_slice()).await?;
+        self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent tx message");
         Ok(())
     }
 
-    async fn handle_ping_msg(&mut self, nonce: u64) -> Result<()> {
+    async fn handle_ping_msg(&mut self, nonce: u64) -> io::Result<()> {
         trace!("Received ping message");
         let msg = RawNetworkMessage {
             magic: self.magic,
             payload: NetworkMessage::Pong(nonce),
         };
-        let _ = self.writer.write_all(serialize(&msg).as_slice()).await?;
+        self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent pong message");
         Ok(())
     }

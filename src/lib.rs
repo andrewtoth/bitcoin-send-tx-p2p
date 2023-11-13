@@ -13,32 +13,42 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod async_encode;
+mod error;
 mod message_handler;
 
-use anyhow::Result;
-use async_encode::AsyncDecodable;
-use bitcoin::network::address::Address;
-use bitcoin::network::constants::ServiceFlags;
-use bitcoin::network::message::RawNetworkMessage;
-use bitcoin::network::message_network::VersionMessage;
-use bitcoin::secp256k1;
-use bitcoin::secp256k1::rand::Rng;
-use bitcoin::{Network, Transaction};
-use log::{info, trace};
-use message_handler::{BroadcastState, MessageHandler};
 #[cfg(feature = "tor")]
 use std::fmt::Debug;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
-use tokio::time::timeout;
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH},
+};
+
+use async_encode::AsyncDecodable;
+use bitcoin::{
+    network::{
+        address::Address, constants::ServiceFlags, message::RawNetworkMessage,
+        message_network::VersionMessage,
+    },
+    secp256k1::{self, rand::Rng},
+    Network, Transaction,
+};
+use log::{info, trace};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
+    net::TcpStream,
+    time::timeout,
+};
 #[cfg(feature = "tor")]
 pub use tokio_socks::IntoTargetAddr;
 #[cfg(feature = "tor")]
 use tokio_socks::{tcp::Socks5Stream, TargetAddr};
 
+pub use crate::error::Error;
+use crate::message_handler::{BroadcastState, MessageHandler};
+
 /// Config options for sending
+#[non_exhaustive]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Config {
     /// The user agent for the initial version message
     ///
@@ -76,7 +86,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             user_agent: String::from("/Satoshi:23.0.0/"),
-            block_height: 749_000,
+            block_height: 810_000,
             network: Network::Bitcoin,
             connection_timeout: Duration::from_secs(30),
             send_tx_timeout: Duration::from_secs(30),
@@ -91,21 +101,20 @@ impl Default for Config {
 ///
 /// # Example
 /// ```rust
-///use anyhow::Result;
 ///use bitcoin::Transaction;
-///use bitcoin_send_tx_p2p::{send_tx_p2p_over_clearnet, Config};
+///use bitcoin_send_tx_p2p::{send_tx_p2p_over_clearnet, Config, Error};
 ///
-///async fn send_tx(tx: Transaction) -> Result<()> {
+///async fn send_tx(tx: Transaction) -> Result<(), Error> {
 ///    let mut config = Config::default();
 ///    config.block_height = 1000;
-///    send_tx_p2p_over_clearnet("127.0.0.1:8333".parse()?, tx, Some(config)).await
+///    send_tx_p2p_over_clearnet("127.0.0.1:8333".parse().unwrap(), tx, Some(config)).await
 ///}
 /// ```
 pub async fn send_tx_p2p_over_clearnet(
     address: SocketAddr,
     tx: Transaction,
     config: Option<Config>,
-) -> Result<()> {
+) -> Result<(), Error> {
     let config = config.unwrap_or_default();
     let mut stream = timeout(config.connection_timeout, TcpStream::connect(address)).await??;
 
@@ -127,24 +136,20 @@ pub async fn send_tx_p2p_over_clearnet(
 ///
 /// # Example
 /// ```rust
-///use anyhow::Result;
 ///use bitcoin::Transaction;
-///use bitcoin_send_tx_p2p::send_tx_p2p_over_tor;
+///use bitcoin_send_tx_p2p::{send_tx_p2p_over_tor, Error};
 ///
-///async fn send_tx(tx: Transaction) -> Result<()> {
+///async fn send_tx(tx: Transaction) -> Result<(), Error> {
 ///    send_tx_p2p_over_tor("cssusbltvosy7hhomxuhicmh5svw6e4z3eebgnyjcnslrloiy5m27pid.onion:8333", tx, None).await
 ///}
 /// ```
 #[cfg(feature = "tor")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tor")))]
-pub async fn send_tx_p2p_over_tor<'t, T>(
-    address: T,
+pub async fn send_tx_p2p_over_tor<'t>(
+    address: impl IntoTargetAddr<'t> + Clone + Debug,
     tx: Transaction,
     config: Option<Config>,
-) -> Result<()>
-where
-    T: IntoTargetAddr<'t> + Clone + Debug,
-{
+) -> Result<(), Error> {
     let config = config.unwrap_or_default();
     let mut stream = timeout(
         config.connection_timeout,
@@ -175,7 +180,7 @@ async fn send_tx_p2p(
     network: Network,
     send_tx_timeout: Duration,
     version_message: VersionMessage,
-) -> Result<()> {
+) -> Result<(), Error> {
     let (read_stream, write_stream) = stream.split();
 
     let mut message_handler = MessageHandler::new(write_stream, network.magic(), tx);
@@ -201,7 +206,7 @@ async fn send_tx_p2p(
 async fn message_loop<W: AsyncWrite + Unpin, R: AsyncRead + Unpin + Send>(
     read_stream: R,
     message_handler: &mut MessageHandler<W>,
-) -> Result<()> {
+) -> Result<(), Error> {
     let mut reader = BufReader::new(read_stream);
     loop {
         let reply = RawNetworkMessage::async_consensus_decode(&mut reader).await?;
@@ -213,7 +218,10 @@ async fn message_loop<W: AsyncWrite + Unpin, R: AsyncRead + Unpin + Send>(
     Ok(())
 }
 
-fn build_version_message(config: &Config, address: Option<SocketAddr>) -> Result<VersionMessage> {
+fn build_version_message(
+    config: &Config,
+    address: Option<SocketAddr>,
+) -> Result<VersionMessage, SystemTimeError> {
     let empty_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 0);
 
     let services = ServiceFlags::WITNESS;
@@ -243,23 +251,19 @@ mod tests {
     #[cfg(feature = "tor")]
     use super::send_tx_p2p_over_tor;
     use super::{send_tx_p2p_over_clearnet, Config};
-    use anyhow::Result;
-    use bitcoin::consensus::encode::deserialize;
-    use bitcoin::Network;
+    use bitcoin::{consensus::encode::deserialize, Network};
     use bitcoincore_rpc::RpcApi;
     use bitcoind::{downloaded_exe_path, BitcoinD, Conf, P2P};
     use hex::FromHex;
     use std::net::SocketAddr;
 
-    use env_logger;
-
     #[tokio::test]
     #[cfg(feature = "tor")]
-    async fn test_tor() -> Result<()> {
+    async fn test_tor() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let tx_bytes = Vec::from_hex("000000800100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000")?;
-        let tx = deserialize(&tx_bytes)?;
+        let tx_bytes = Vec::from_hex("000000800100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000").unwrap();
+        let tx = deserialize(&tx_bytes).unwrap();
         let result = send_tx_p2p_over_tor(
             "cssusbltvosy7hhomxuhicmh5svw6e4z3eebgnyjcnslrloiy5m27pid.onion:8333",
             tx,
@@ -267,29 +271,30 @@ mod tests {
         )
         .await;
         tokio_test::assert_ok!(result, "Send over tor failed");
-        Ok(())
     }
 
     #[tokio::test]
-    async fn test_clearnet() -> Result<()> {
+    async fn test_clearnet() {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let mut conf = Conf::default();
         conf.p2p = P2P::Yes;
-        let bitcoind = BitcoinD::with_conf(downloaded_exe_path()?, &conf)?;
-        let address = bitcoind.client.get_new_address(None, None)?;
+        let bitcoind = BitcoinD::with_conf(downloaded_exe_path().unwrap(), &conf).unwrap();
+        let address = bitcoind.client.get_new_address(None, None).unwrap();
+        let address = address.require_network(Network::Regtest).unwrap();
         // Need to generate a block before bitcoind will respond with getdata for a tx
-        bitcoind.client.generate_to_address(1, &address)?;
+        bitcoind.client.generate_to_address(1, &address).unwrap();
         let address = bitcoind.params.p2p_socket.unwrap();
 
-        let tx_bytes = Vec::from_hex("000000800100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000")?;
-        let tx = deserialize(&tx_bytes)?;
+        let tx_bytes = Vec::from_hex("000000800100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000").unwrap();
+        let tx = deserialize(&tx_bytes).unwrap();
 
-        let mut config = Config::default();
-        config.network = Network::Regtest;
+        let config = Config {
+            network: Network::Regtest,
+            ..Default::default()
+        };
 
         let result = send_tx_p2p_over_clearnet(SocketAddr::from(address), tx, Some(config)).await;
         tokio_test::assert_ok!(result, "Send over clearnet failed");
-        Ok(())
     }
 }

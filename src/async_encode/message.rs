@@ -22,7 +22,7 @@ impl AsyncDecodable for RawNetworkMessage {
             .await?
             .0;
         let mut mem_d = Cursor::new(raw_payload);
-        let payload = match &cmd.as_ref()[..] {
+        let payload = match cmd.as_ref() {
             "version" => NetworkMessage::Version(
                 AsyncDecodable::async_consensus_decode_from_finite_reader(&mut mem_d).await?,
             ),
