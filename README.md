@@ -11,6 +11,20 @@ transaction it disconnects. Note that if the receiving node already has the
 transaction it will not respond with a a `getdata` message, in which case
 the sending function will timeout and disconnect.
 
+### Installation
+
+Run the following Cargo command in your project directory:
+
+```bash
+cargo add bitcoin-send-tx-p2p
+```
+
+Or add the following line to your Cargo.toml:
+
+```toml
+bitcoin-send-tx-p2p = "0.2.0"
+```
+
 ### Examples
 
 ```rust

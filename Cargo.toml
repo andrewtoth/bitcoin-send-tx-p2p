@@ -1,6 +1,6 @@
 [package]
 name = "bitcoin-send-tx-p2p"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["Andrew Toth"]
 license = "MIT"
 homepage = "https://github.com/andrewtoth/bitcoin-send-tx-p2p/"
