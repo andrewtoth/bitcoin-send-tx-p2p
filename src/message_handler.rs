@@ -1,11 +1,10 @@
 use bitcoin::{
     consensus::encode::serialize,
-    network::{
-        constants::{self, ServiceFlags},
+    p2p::{
         message::{NetworkMessage, RawNetworkMessage},
         message_blockdata::Inventory,
         message_network::VersionMessage,
-        Magic,
+        Magic, ServiceFlags, PROTOCOL_VERSION,
     },
     Transaction,
 };
@@ -47,10 +46,7 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
     }
 
     pub async fn send_version_msg(&mut self, msg: VersionMessage) -> io::Result<()> {
-        let message = RawNetworkMessage {
-            magic: self.magic,
-            payload: NetworkMessage::Version(msg),
-        };
+        let message = RawNetworkMessage::new(self.magic, NetworkMessage::Version(msg));
         let _ = self.writer.write(&serialize(&message)).await?;
         trace!("Sent version message");
         self.state = BroadcastState::AwaitingVersion;
@@ -134,25 +130,16 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
             return Err(Error::Protocol("Node does not support segwit".into()));
         }
 
-        if version_msg.version == constants::PROTOCOL_VERSION {
-            let msg = RawNetworkMessage {
-                magic: self.magic,
-                payload: NetworkMessage::WtxidRelay,
-            };
+        if version_msg.version == PROTOCOL_VERSION {
+            let msg = RawNetworkMessage::new(self.magic, NetworkMessage::WtxidRelay);
             self.writer.write_all(serialize(&msg).as_slice()).await?;
             trace!("Sent wtxid message");
-            let msg = RawNetworkMessage {
-                magic: self.magic,
-                payload: NetworkMessage::SendAddrV2,
-            };
+            let msg = RawNetworkMessage::new(self.magic, NetworkMessage::SendAddrV2);
             self.writer.write_all(serialize(&msg).as_slice()).await?;
             trace!("Sent sendaddrv2 message");
         }
 
-        let msg = RawNetworkMessage {
-            magic: self.magic,
-            payload: NetworkMessage::Verack,
-        };
+        let msg = RawNetworkMessage::new(self.magic, NetworkMessage::Verack);
         self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent verack message");
         Ok(())
@@ -161,14 +148,11 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
     async fn handle_verack_msg(&mut self) -> io::Result<()> {
         trace!("Received verack message");
         let inv = if self.use_wtxid {
-            Inventory::WTx(self.tx.wtxid())
+            Inventory::WTx(self.tx.compute_wtxid())
         } else {
-            Inventory::Transaction(self.tx.txid())
+            Inventory::Transaction(self.tx.compute_txid())
         };
-        let msg = RawNetworkMessage {
-            magic: self.magic,
-            payload: NetworkMessage::Inv(vec![inv]),
-        };
+        let msg = RawNetworkMessage::new(self.magic, NetworkMessage::Inv(vec![inv]));
         self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent inv message");
         Ok(())
@@ -182,22 +166,21 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
 
     async fn handle_get_data(&mut self, inv: Vec<Inventory>) -> Result<(), Error> {
         trace!("Received getdata message");
-        if self.use_wtxid && !inv.contains(&Inventory::WTx(self.tx.wtxid())) {
+        if self.use_wtxid && !inv.contains(&Inventory::WTx(self.tx.compute_wtxid())) {
             return Err(Error::Protocol(
                 "Getdata message does not contain our wtxid".into(),
             ));
-        } else if !self.use_wtxid
-            && !inv.contains(&Inventory::Transaction(self.tx.txid()))
-            && !inv.contains(&Inventory::WitnessTransaction(self.tx.txid()))
-        {
-            return Err(Error::Protocol(
-                "Getdata message does not contain our txid".into(),
-            ));
+        } else if !self.use_wtxid {
+            let txid = self.tx.compute_txid();
+            if !inv.contains(&Inventory::Transaction(txid))
+                && !inv.contains(&Inventory::WitnessTransaction(txid))
+            {
+                return Err(Error::Protocol(
+                    "Getdata message does not contain our txid".into(),
+                ));
+            }
         }
-        let msg = RawNetworkMessage {
-            magic: self.magic,
-            payload: NetworkMessage::Tx(self.tx.clone()),
-        };
+        let msg = RawNetworkMessage::new(self.magic, NetworkMessage::Tx(self.tx.clone()));
         self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent tx message");
         Ok(())
@@ -205,10 +188,7 @@ impl<W: AsyncWrite + Unpin> MessageHandler<W> {
 
     async fn handle_ping_msg(&mut self, nonce: u64) -> io::Result<()> {
         trace!("Received ping message");
-        let msg = RawNetworkMessage {
-            magic: self.magic,
-            payload: NetworkMessage::Pong(nonce),
-        };
+        let msg = RawNetworkMessage::new(self.magic, NetworkMessage::Pong(nonce));
         self.writer.write_all(serialize(&msg).as_slice()).await?;
         trace!("Sent pong message");
         Ok(())

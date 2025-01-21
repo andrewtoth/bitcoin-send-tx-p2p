@@ -1,13 +1,18 @@
-use crate::async_encode::encode::AsyncDecodable;
-use async_trait::async_trait;
-use bitcoin::consensus::encode::{CheckedData, Error};
-use bitcoin::network::constants::ServiceFlags;
-use bitcoin::network::message::{CommandString, NetworkMessage, RawNetworkMessage};
-use bitcoin::network::message_network::VersionMessage;
-use bitcoin::network::Address;
 use core::iter::FromIterator;
 use std::io::Cursor;
+
+use async_trait::async_trait;
+use bitcoin::{
+    consensus::encode::{CheckedData, Error},
+    p2p::{
+        message::{CommandString, NetworkMessage, RawNetworkMessage},
+        message_network::VersionMessage,
+        Address, ServiceFlags,
+    },
+};
 use tokio::io::{AsyncRead, AsyncReadExt};
+
+use crate::async_encode::encode::AsyncDecodable;
 
 const MAX_MSG_SIZE: usize = 5_000_000;
 
@@ -20,7 +25,7 @@ impl AsyncDecodable for RawNetworkMessage {
         let cmd = CommandString::async_consensus_decode_from_finite_reader(r).await?;
         let raw_payload = CheckedData::async_consensus_decode_from_finite_reader(r)
             .await?
-            .0;
+            .into_data();
         let mut mem_d = Cursor::new(raw_payload);
         let payload = match cmd.as_ref() {
             "version" => NetworkMessage::Version(
@@ -43,7 +48,7 @@ impl AsyncDecodable for RawNetworkMessage {
                 payload: mem_d.into_inner(),
             },
         };
-        Ok(RawNetworkMessage { magic, payload })
+        Ok(RawNetworkMessage::new(magic, payload))
     }
 
     #[inline]
@@ -132,7 +137,9 @@ async fn read_be_address<R: AsyncRead + Sized + Unpin>(r: &mut R) -> Result<[u16
     let mut buf = [0u8; 2];
 
     for word in &mut address {
-        r.read_exact(&mut buf).await?;
+        r.read_exact(&mut buf)
+            .await
+            .map_err(bitcoin::io::Error::from)?;
         *word = u16::from_be_bytes(buf)
     }
     Ok(address)
