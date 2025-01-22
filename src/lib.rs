@@ -27,10 +27,10 @@ use async_encode::AsyncDecodable;
 use bitcoin::{
     network::{
         address::Address, constants::ServiceFlags, message::RawNetworkMessage,
-        message_network::VersionMessage,
+        message_network::VersionMessage, Magic,
     },
     secp256k1::{self, rand::Rng},
-    Network, Transaction,
+    Transaction,
 };
 use log::{info, trace};
 use tokio::{
@@ -60,8 +60,8 @@ pub struct Config {
     pub block_height: i32,
     /// The network to use
     ///
-    /// Defaults to [`Network::Bitcoin`]
-    pub network: Network,
+    /// Defaults to [`Magic::BITCOIN`]
+    pub magic: Magic,
     /// The timeout duration for the initial connection to the node
     ///
     /// Default is 30 seconds but that might not be long enough for tor
@@ -87,7 +87,7 @@ impl Default for Config {
         Config {
             user_agent: String::from("/Satoshi:23.0.0/"),
             block_height: 810_000,
-            network: Network::Bitcoin,
+            magic: Magic::BITCOIN,
             connection_timeout: Duration::from_secs(30),
             send_tx_timeout: Duration::from_secs(30),
             #[cfg(feature = "tor")]
@@ -124,7 +124,7 @@ pub async fn send_tx_p2p_over_clearnet(
     send_tx_p2p(
         &mut stream,
         tx,
-        config.network,
+        config.magic,
         config.send_tx_timeout,
         version_message,
     )
@@ -167,7 +167,7 @@ pub async fn send_tx_p2p_over_tor<'t>(
     send_tx_p2p(
         &mut stream,
         tx,
-        config.network,
+        config.magic,
         config.send_tx_timeout,
         version_message,
     )
@@ -177,13 +177,13 @@ pub async fn send_tx_p2p_over_tor<'t>(
 async fn send_tx_p2p(
     stream: &mut TcpStream,
     tx: Transaction,
-    network: Network,
+    magic: Magic,
     send_tx_timeout: Duration,
     version_message: VersionMessage,
 ) -> Result<(), Error> {
     let (read_stream, write_stream) = stream.split();
 
-    let mut message_handler = MessageHandler::new(write_stream, network.magic(), tx);
+    let mut message_handler = MessageHandler::new(write_stream, magic, tx);
     message_handler.send_version_msg(version_message).await?;
 
     let result = timeout(
@@ -290,7 +290,7 @@ mod tests {
         let tx = deserialize(&tx_bytes).unwrap();
 
         let config = Config {
-            network: Network::Regtest,
+            magic: Network::Regtest.magic(),
             ..Default::default()
         };
 
