@@ -25,9 +25,8 @@ use std::{
 
 use async_encode::AsyncDecodable;
 use bitcoin::{
-    network::{
-        address::Address, constants::ServiceFlags, message::RawNetworkMessage,
-        message_network::VersionMessage, Magic,
+    p2p::{
+        message::RawNetworkMessage, message_network::VersionMessage, Address, Magic, ServiceFlags,
     },
     secp256k1::{self, rand::Rng},
     Transaction,
@@ -210,7 +209,7 @@ async fn message_loop<W: AsyncWrite + Unpin, R: AsyncRead + Unpin + Send>(
     let mut reader = BufReader::new(read_stream);
     loop {
         let reply = RawNetworkMessage::async_consensus_decode(&mut reader).await?;
-        message_handler.handle_message(reply.payload).await?;
+        message_handler.handle_message(reply.into_payload()).await?;
         if message_handler.state() == BroadcastState::Done {
             break;
         }
@@ -252,8 +251,7 @@ mod tests {
     use super::send_tx_p2p_over_tor;
     use super::{send_tx_p2p_over_clearnet, Config};
     use bitcoin::{consensus::encode::deserialize, Network};
-    use bitcoincore_rpc::RpcApi;
-    use bitcoind::{downloaded_exe_path, BitcoinD, Conf, P2P};
+    use corepc_node::{downloaded_exe_path, Conf, Node, P2P};
     use hex::FromHex;
     use std::net::SocketAddr;
 
@@ -279,8 +277,8 @@ mod tests {
 
         let mut conf = Conf::default();
         conf.p2p = P2P::Yes;
-        let bitcoind = BitcoinD::with_conf(downloaded_exe_path().unwrap(), &conf).unwrap();
-        let address = bitcoind.client.get_new_address(None, None).unwrap();
+        let bitcoind = Node::with_conf(downloaded_exe_path().unwrap(), &conf).unwrap();
+        let address = bitcoind.client.new_address_with_label("").unwrap();
         let address = address.require_network(Network::Regtest).unwrap();
         // Need to generate a block before bitcoind will respond with getdata for a tx
         bitcoind.client.generate_to_address(1, &address).unwrap();

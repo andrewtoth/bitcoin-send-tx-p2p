@@ -1,10 +1,12 @@
-use async_trait::async_trait;
-use bitcoin::consensus::encode::{CheckedData, Error, MAX_VEC_SIZE};
-use bitcoin::hashes::{sha256d, Hash};
-use bitcoin::network::message_blockdata::Inventory;
-use bitcoin::network::Magic;
-use bitcoin::{BlockHash, Txid, VarInt, Wtxid};
 use core::mem;
+
+use async_trait::async_trait;
+use bitcoin::{
+    consensus::encode::{CheckedData, Error, MAX_VEC_SIZE},
+    hashes::{sha256d, Hash as _},
+    p2p::{message_blockdata::Inventory, Magic},
+    BlockHash, Txid, VarInt, Wtxid,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[async_trait]
@@ -42,7 +44,9 @@ macro_rules! impl_int_encodable {
             async fn async_consensus_decode<R: AsyncRead + Sized + Send + Unpin>(
                 r: &mut R,
             ) -> Result<Self, Error> {
-                AsyncReadExt::$meth_dec(r).await.map_err(Error::Io)
+                AsyncReadExt::$meth_dec(r)
+                    .await
+                    .map_err(|err| bitcoin::io::Error::from(err).into())
             }
         }
         #[async_trait]
@@ -74,10 +78,14 @@ impl AsyncDecodable for VarInt {
     async fn async_consensus_decode<R: AsyncRead + Sized + Send + Unpin>(
         r: &mut R,
     ) -> Result<Self, Error> {
-        let n = AsyncReadExt::read_u8(r).await?;
+        let n = AsyncReadExt::read_u8(r)
+            .await
+            .map_err(bitcoin::io::Error::from)?;
         match n {
             0xFF => {
-                let x = AsyncReadExt::read_u64(r).await?;
+                let x = AsyncReadExt::read_u64(r)
+                    .await
+                    .map_err(bitcoin::io::Error::from)?;
                 if x < 0x100000000 {
                     Err(self::Error::NonMinimalVarInt)
                 } else {
@@ -85,7 +93,9 @@ impl AsyncDecodable for VarInt {
                 }
             }
             0xFE => {
-                let x = AsyncReadExt::read_u32(r).await?;
+                let x = AsyncReadExt::read_u32(r)
+                    .await
+                    .map_err(bitcoin::io::Error::from)?;
                 if x < 0x10000 {
                     Err(self::Error::NonMinimalVarInt)
                 } else {
@@ -93,7 +103,9 @@ impl AsyncDecodable for VarInt {
                 }
             }
             0xFD => {
-                let x = AsyncReadExt::read_u16(r).await?;
+                let x = AsyncReadExt::read_u16(r)
+                    .await
+                    .map_err(bitcoin::io::Error::from)?;
                 if x < 0xFD {
                     Err(self::Error::NonMinimalVarInt)
                 } else {
@@ -144,7 +156,7 @@ impl AsyncDecodable for bool {
     ) -> Result<Self, Error> {
         AsyncReadExt::read_i8(r)
             .await
-            .map_err(Error::Io)
+            .map_err(|err| bitcoin::io::Error::from(err).into())
             .map(|bit| bit != 0)
     }
 }
@@ -181,7 +193,9 @@ macro_rules! impl_array {
                 r: &mut R,
             ) -> Result<Self, Error> {
                 let mut ret = [0; $size];
-                r.read_exact(&mut ret).await.map_err(Error::Io)?;
+                r.read_exact(&mut ret)
+                    .await
+                    .map_err(bitcoin::io::Error::from)?;
                 Ok(ret)
             }
         }
@@ -294,7 +308,7 @@ async fn read_bytes_from_finite_reader<D: AsyncRead + Sized + Send + Unpin>(
         ret.resize(chunk_end, 0u8);
         d.read_exact(&mut ret[chunk_start..chunk_end])
             .await
-            .map_err(Error::Io)?;
+            .map_err(bitcoin::io::Error::from)?;
         opts.len -= chunk_size;
     }
 
@@ -349,7 +363,7 @@ impl AsyncDecodable for CheckedData {
                 actual: checksum,
             })
         } else {
-            Ok(CheckedData(ret))
+            Ok(CheckedData::new(ret))
         }
     }
 }
