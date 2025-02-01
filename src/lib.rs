@@ -57,7 +57,7 @@ pub struct Config {
     ///
     /// Defaults to `749_000`
     pub block_height: i32,
-    /// The network to use
+    /// The network magic to use
     ///
     /// Defaults to [`Magic::BITCOIN`]
     pub magic: Magic,
