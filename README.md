@@ -22,7 +22,7 @@ cargo add bitcoin-send-tx-p2p
 Or add the following line to your Cargo.toml:
 
 ```toml
-bitcoin-send-tx-p2p = "0.2.0"
+bitcoin-send-tx-p2p = "0.3.0"
 ```
 
 ### Examples
